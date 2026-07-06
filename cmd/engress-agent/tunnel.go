@@ -1,13 +1,18 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/hashicorp/yamux"
 	"github.com/spf13/cobra"
+
+	"github.com/ghostweasellabs/engress-agent/internal/tunnel"
 )
 
 func newTunnelCmd() *cobra.Command {
@@ -16,7 +21,41 @@ func newTunnelCmd() *cobra.Command {
 		Short: "Manage outbound tunnels to engress-edge",
 	}
 	cmd.AddCommand(newTunnelConnectCmd())
+	cmd.AddCommand(newTunnelServeCmd())
 	return cmd
+}
+
+func newTunnelServeCmd() *cobra.Command {
+	var edgeHost string
+	var edgePort int
+	var endpointID string
+	var localAddr string
+
+	c := &cobra.Command{
+		Use:   "serve",
+		Short: "Register with Edge and proxy HTTP from yamux streams to a local backend",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+			defer stop()
+
+			return tunnel.Serve(ctx, tunnel.ServeConfig{
+				EdgeHost:   edgeHost,
+				EdgePort:   edgePort,
+				EndpointID: endpointID,
+				LocalAddr:  localAddr,
+			})
+		},
+	}
+	c.Flags().StringVar(&edgeHost, "edge-host", "127.0.0.1", "Edge public hostname")
+	c.Flags().IntVar(&edgePort, "edge-port", 7443, "Edge tunnel port")
+	c.Flags().StringVar(&endpointID, "endpoint-id", "", "Endpoint ID to register with Edge")
+	c.Flags().StringVar(&localAddr, "local", "", "Local TCP backend (e.g. 127.0.0.1:18080); empty uses built-in smoke handler")
+	_ = c.MarkFlagRequired("endpoint-id")
+	return c
 }
 
 func newTunnelConnectCmd() *cobra.Command {
