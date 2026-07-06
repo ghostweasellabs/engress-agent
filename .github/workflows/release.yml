@@ -1,0 +1,16 @@
+name: release
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+jobs:
+  release:
+    permissions:
+      contents: read
+      packages: write
+    uses: ghostweasellabs/engress-os/.github/workflows/go-service-release.yml@main
+    with:
+      module-path: github.com/ghostweasellabs/engress-agent
+      binary-path: ./cmd/engress-agent
+      image-name: engress-agent

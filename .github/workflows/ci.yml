@@ -1,0 +1,12 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    uses: ghostweasellabs/engress-os/.github/workflows/go-service-ci.yml@main
+    with:
+      module-path: github.com/ghostweasellabs/engress-agent
+      binary-path: ./cmd/engress-agent

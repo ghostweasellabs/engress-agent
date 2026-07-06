@@ -1,0 +1,16 @@
+# syntax=docker/dockerfile:1
+FROM golang:1.25-bookworm AS build
+ARG MODULE_PATH=github.com/ghostweasellabs/engress-agent
+ARG BINARY_PATH=./cmd/engress-agent
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o /out/engress-agent ${BINARY_PATH}
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=build /out/engress-agent /usr/local/bin/engress-agent
+ENTRYPOINT ["/usr/local/bin/engress-agent"]
+CMD ["version"]
