@@ -7,7 +7,8 @@ on:
 jobs:
   ci:
     uses: ghostweasellabs/engress-os/.github/workflows/go-service-ci.yml@main
-    secrets: inherit
+    secrets:
+      ENGRESS_CI_APP_PRIVATE_KEY: ${{ secrets.ENGRESS_CI_APP_PRIVATE_KEY }}
     with:
       module-path: github.com/ghostweasellabs/engress-agent
       binary-path: ./cmd/engress-agent
