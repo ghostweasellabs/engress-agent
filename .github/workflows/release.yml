@@ -10,6 +10,7 @@ jobs:
       contents: read
       packages: write
     uses: ghostweasellabs/engress-os/.github/workflows/go-service-release.yml@main
+    secrets: inherit
     with:
       module-path: github.com/ghostweasellabs/engress-agent
       binary-path: ./cmd/engress-agent

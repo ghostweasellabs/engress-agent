@@ -2,9 +2,13 @@
 FROM golang:1.25-bookworm AS build
 ARG MODULE_PATH=github.com/ghostweasellabs/engress-agent
 ARG BINARY_PATH=./cmd/engress-agent
+ENV GOPRIVATE=github.com/ghostweasellabs/*
+ENV GONOSUMDB=github.com/ghostweasellabs/*
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=secret,id=github_token \
+    git config --global url."https://x-access-token:$(cat /run/secrets/github_token)@github.com/".insteadOf "https://github.com/" && \
+    go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o /out/engress-agent ${BINARY_PATH}
 
