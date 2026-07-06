@@ -7,7 +7,9 @@ import (
 )
 
 func main() {
-	if err := cli.NewRootCommand().Execute(); err != nil {
+	root := cli.NewRootCommand()
+	root.AddCommand(newTunnelCmd())
+	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
 }

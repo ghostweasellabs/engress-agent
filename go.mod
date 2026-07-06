@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/ghostweasellabs/engress-sdk v0.0.0-20260706015316-4327230acb4f
+	github.com/hashicorp/yamux v0.1.2
 	github.com/spf13/cobra v1.10.2
 )
 
