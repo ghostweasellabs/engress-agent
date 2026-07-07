@@ -4,16 +4,164 @@ on:
     branches: [main]
     tags: ['v*']
 
+env:
+  MODULE_PATH: github.com/ghostweasellabs/engress-agent
+  BINARY_PATH: ./cmd/engress-agent
+  IMAGE_NAME: engress-agent
+
 jobs:
-  release:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image tags and build version
+        id: meta
+        run: |
+          SHA="$(git rev-parse --short HEAD)"
+          echo "sha_tag=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "commit=${SHA}" >> "$GITHUB_OUTPUT"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            echo "semver_tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${SHA}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: Iv23liJ0cYa8efo330No
+          private-key: ${{ secrets.ENGRESS_CI_APP_PRIVATE_KEY }}
+          owner: ghostweasellabs
+          permission-contents: read
+
+      - name: Select module access token
+        id: module-token
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          ORG_TOKEN: ${{ secrets.ENGRESS_ORG_READ_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TOKEN="${APP_TOKEN:-${ORG_TOKEN:-$GITHUB_TOKEN}}"
+          echo "::add-mask::${TOKEN}"
+          echo "token=${TOKEN}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (git-short-sha tag, always)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: |
+            MODULE_PATH=${{ env.MODULE_PATH }}
+            BINARY_PATH=${{ env.BINARY_PATH }}
+            VERSION=${{ steps.meta.outputs.version }}
+            COMMIT=${{ steps.meta.outputs.commit }}
+          secrets: |
+            github_token=${{ steps.module-token.outputs.token }}
+          tags: ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.sha_tag }}
+
+      - name: Build and push (semver tag, tagged releases only)
+        if: steps.meta.outputs.semver_tag != ''
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: |
+            MODULE_PATH=${{ env.MODULE_PATH }}
+            BINARY_PATH=${{ env.BINARY_PATH }}
+            VERSION=${{ steps.meta.outputs.version }}
+            COMMIT=${{ steps.meta.outputs.commit }}
+          secrets: |
+            github_token=${{ steps.module-token.outputs.token }}
+          tags: ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.semver_tag }}
+
+  binary-release:
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
     permissions:
       contents: write
-      packages: write
-    uses: ghostweasellabs/engress-os/.github/workflows/go-service-release.yml@main
-    secrets:
-      ENGRESS_CI_APP_PRIVATE_KEY: ${{ secrets.ENGRESS_CI_APP_PRIVATE_KEY }}
-    with:
-      module-path: github.com/ghostweasellabs/engress-agent
-      binary-path: ./cmd/engress-agent
-      image-name: engress-agent
-      binaries: true
+    env:
+      GOPRIVATE: github.com/ghostweasellabs/*
+      GONOSUMDB: github.com/ghostweasellabs/*
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: Iv23liJ0cYa8efo330No
+          private-key: ${{ secrets.ENGRESS_CI_APP_PRIVATE_KEY }}
+          owner: ghostweasellabs
+          permission-contents: read
+
+      - name: Select module access token
+        id: module-token
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          ORG_TOKEN: ${{ secrets.ENGRESS_ORG_READ_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TOKEN="${APP_TOKEN:-${ORG_TOKEN:-$GITHUB_TOKEN}}"
+          echo "::add-mask::${TOKEN}"
+          echo "token=${TOKEN}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure private module access
+        run: git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
+        env:
+          TOKEN: ${{ steps.module-token.outputs.token }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build matrix binaries
+        env:
+          GOFLAGS: -trimpath
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME}"
+          COMMIT="$(git rev-parse --short HEAD)"
+          NAME="${{ env.IMAGE_NAME }}"
+          LDFLAGS="-s -w -X github.com/ghostweasellabs/engress-sdk/observability.Version=${VERSION} -X github.com/ghostweasellabs/engress-sdk/observability.Commit=${COMMIT}"
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            GOOS="${target%/*}"; GOARCH="${target#*/}"
+            EXT=""; [[ "$GOOS" == "windows" ]] && EXT=".exe"
+            OUT="dist/${NAME}${EXT}"
+            CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
+              go build -ldflags "$LDFLAGS" -o "$OUT" "${{ env.BINARY_PATH }}"
+            PKG="${NAME}_${VERSION}_${GOOS}_${GOARCH}"
+            if [[ "$GOOS" == "windows" ]]; then
+              (cd dist && zip -q "${PKG}.zip" "${NAME}${EXT}" && rm "${NAME}${EXT}")
+            else
+              (cd dist && tar czf "${PKG}.tar.gz" "${NAME}" && rm "${NAME}")
+            fi
+          done
+          (cd dist && sha256sum ./* > checksums.txt)
+
+      - name: Verify linux/amd64 binary reports the tag version
+        run: |
+          set -euo pipefail
+          NAME="${{ env.IMAGE_NAME }}"
+          tar xzf "dist/${NAME}_${GITHUB_REF_NAME}_linux_amd64.tar.gz" -C /tmp
+          /tmp/"${NAME}" version | grep -F "${GITHUB_REF_NAME}"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
