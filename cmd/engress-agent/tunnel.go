@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/hashicorp/yamux"
 	"github.com/spf13/cobra"
@@ -28,12 +31,17 @@ func newTunnelCmd() *cobra.Command {
 func newTunnelServeCmd() *cobra.Command {
 	var edgeHost string
 	var edgePort int
-	var endpointID string
+	var token string
+	var endpointIDs []string
 	var localAddr string
+	var tlsCA string
+	var tlsServerName string
+	var apiBase string
+	var insecureSkip bool
 
 	c := &cobra.Command{
 		Use:   "serve",
-		Short: "Register with Edge and proxy HTTP from yamux streams to a local backend",
+		Short: "Authenticate with Edge and proxy HTTP from yamux streams to a local backend",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			if ctx == nil {
@@ -42,20 +50,96 @@ func newTunnelServeCmd() *cobra.Command {
 			ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 			defer stop()
 
-			return tunnel.Serve(ctx, tunnel.ServeConfig{
-				EdgeHost:   edgeHost,
-				EdgePort:   edgePort,
-				EndpointID: endpointID,
-				LocalAddr:  localAddr,
-			})
+			if insecureSkip {
+				_, _ = fmt.Fprintln(os.Stderr, "warning: --insecure-skip-verify disables TLS certificate verification")
+			}
+
+			localAddrs := map[string]string{}
+			if localAddr != "" {
+				for _, id := range endpointIDs {
+					localAddrs[id] = localAddr
+				}
+			}
+
+			var caPEM []byte
+			if !insecureSkip {
+				var err error
+				caPEM, err = tunnel.ResolveTunnelCA(tlsCA, apiBase)
+				if err != nil {
+					return err
+				}
+			}
+
+			cfg := tunnel.ServeConfig{
+				EdgeHost:      edgeHost,
+				EdgePort:      edgePort,
+				Token:         token,
+				EndpointIDs:   endpointIDs,
+				LocalAddrs:    localAddrs,
+				TLSCAPEM:      caPEM,
+				TLSServerName: tlsServerName,
+				InsecureSkip:  insecureSkip,
+			}
+
+			return serveWithBackoff(ctx, cfg)
 		},
 	}
 	c.Flags().StringVar(&edgeHost, "edge-host", "127.0.0.1", "Edge public hostname")
 	c.Flags().IntVar(&edgePort, "edge-port", 7443, "Edge tunnel port")
-	c.Flags().StringVar(&endpointID, "endpoint-id", "", "Endpoint ID to register with Edge")
+	c.Flags().StringVar(&token, "token", "", "Tunnel auth token")
+	c.Flags().StringSliceVar(&endpointIDs, "endpoint-id", nil, "Endpoint ID to register (repeatable)")
 	c.Flags().StringVar(&localAddr, "local", "", "Local TCP backend (e.g. 127.0.0.1:18080); empty uses built-in smoke handler")
+	c.Flags().StringVar(&tlsCA, "tls-ca", "", "Path to tunnel CA PEM (default: fetch from API)")
+	c.Flags().StringVar(&tlsServerName, "tls-server-name", "", "TLS SNI server name (default: edge-host)")
+	c.Flags().StringVar(&apiBase, "api-base", "https://engress.io", "API base URL for tunnel CA fetch")
+	c.Flags().BoolVar(&insecureSkip, "insecure-skip-verify", false, "Skip TLS certificate verification (lab only)")
+	_ = c.Flags().MarkHidden("insecure-skip-verify")
+	_ = c.MarkFlagRequired("token")
 	_ = c.MarkFlagRequired("endpoint-id")
 	return c
+}
+
+func serveWithBackoff(ctx context.Context, cfg tunnel.ServeConfig) error {
+	delay := time.Second
+	const maxDelay = 60 * time.Second
+
+	for {
+		start := time.Now()
+		err := tunnel.Serve(ctx, cfg)
+		if errors.Is(err, tunnel.ErrAuthRejected) {
+			return err
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		if time.Since(start) >= maxDelay {
+			delay = time.Second
+		}
+
+		wait := jitteredDelay(delay)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(wait):
+		}
+
+		if delay < maxDelay {
+			delay *= 2
+			if delay > maxDelay {
+				delay = maxDelay
+			}
+		}
+	}
+}
+
+func jitteredDelay(base time.Duration) time.Duration {
+	if base <= 0 {
+		return 0
+	}
+	// ±20% jitter
+	jitter := 0.8 + rand.Float64()*0.4
+	return time.Duration(float64(base) * jitter)
 }
 
 func newTunnelConnectCmd() *cobra.Command {
