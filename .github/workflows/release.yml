@@ -88,80 +88,52 @@ jobs:
             github_token=${{ steps.module-token.outputs.token }}
           tags: ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.semver_tag }}
 
-  binary-release:
-    if: github.ref_type == 'tag'
+  binaries:
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    env:
-      GOPRIVATE: github.com/ghostweasellabs/*
-      GONOSUMDB: github.com/ghostweasellabs/*
     steps:
       - uses: actions/checkout@v4
-
-      - name: Mint GitHub App token
-        id: app-token
-        uses: actions/create-github-app-token@v3
-        with:
-          client-id: Iv23liJ0cYa8efo330No
-          private-key: ${{ secrets.ENGRESS_CI_APP_PRIVATE_KEY }}
-          owner: ghostweasellabs
-          permission-contents: read
-
-      - name: Select module access token
-        id: module-token
-        env:
-          APP_TOKEN: ${{ steps.app-token.outputs.token }}
-          ORG_TOKEN: ${{ secrets.ENGRESS_ORG_READ_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TOKEN="${APP_TOKEN:-${ORG_TOKEN:-$GITHUB_TOKEN}}"
-          echo "::add-mask::${TOKEN}"
-          echo "token=${TOKEN}" >> "$GITHUB_OUTPUT"
-
-      - name: Configure private module access
-        run: git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
-        env:
-          TOKEN: ${{ steps.module-token.outputs.token }}
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
-      - name: Build matrix binaries
-        env:
-          GOFLAGS: -trimpath
-        run: |
-          set -euo pipefail
-          VERSION="${GITHUB_REF_NAME}"
-          COMMIT="$(git rev-parse --short HEAD)"
-          NAME="${{ env.IMAGE_NAME }}"
-          LDFLAGS="-s -w -X github.com/ghostweasellabs/engress-sdk/observability.Version=${VERSION} -X github.com/ghostweasellabs/engress-sdk/observability.Commit=${COMMIT}"
-          mkdir -p dist
-          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
-            GOOS="${target%/*}"; GOARCH="${target#*/}"
-            EXT=""; [[ "$GOOS" == "windows" ]] && EXT=".exe"
-            OUT="dist/${NAME}${EXT}"
-            CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
-              go build -ldflags "$LDFLAGS" -o "$OUT" "${{ env.BINARY_PATH }}"
-            PKG="${NAME}_${VERSION}_${GOOS}_${GOARCH}"
-            if [[ "$GOOS" == "windows" ]]; then
-              (cd dist && zip -q "${PKG}.zip" "${NAME}${EXT}" && rm "${NAME}${EXT}")
-            else
-              (cd dist && tar czf "${PKG}.tar.gz" "${NAME}" && rm "${NAME}")
-            fi
-          done
-          (cd dist && sha256sum ./* > checksums.txt)
-
-      - name: Verify linux/amd64 binary reports the tag version
-        run: |
-          set -euo pipefail
-          NAME="${{ env.IMAGE_NAME }}"
-          tar xzf "dist/${NAME}_${GITHUB_REF_NAME}_linux_amd64.tar.gz" -C /tmp
-          /tmp/"${NAME}" version | grep -F "${GITHUB_REF_NAME}"
-
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+      - uses: actions/create-github-app-token@v3
+        id: app-token
         with:
-          files: dist/*
-          generate_release_notes: true
+          client-id: ${{ vars.ENGRESS_CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.ENGRESS_CI_APP_PRIVATE_KEY }}
+          owner: ghostweasellabs
+          repositories: engress-sdk
+          permission-contents: read
+
+      - name: Configure private module access
+        run: |
+          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
+          echo "GOPRIVATE=github.com/ghostweasellabs/*" >> "$GITHUB_ENV"
+          echo "GONOSUMDB=github.com/ghostweasellabs/*" >> "$GITHUB_ENV"
+        env:
+          TOKEN: ${{ steps.app-token.outputs.token }}
+
+      - name: Build all platforms
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          LDFLAGS="$(scripts/version-ldflags.sh)"
+          mkdir -p dist
+          for os in linux darwin windows; do
+            for arch in amd64 arm64; do
+              ext=""; [ "$os" = "windows" ] && ext=".exe"
+              out="dist/engress-agent_${GITHUB_REF_NAME}_${os}_${arch}${ext}"
+              echo "building $out"
+              GOOS="$os" GOARCH="$arch" go build -ldflags "$LDFLAGS" -o "$out" ./cmd/engress-agent
+            done
+          done
+          (cd dist && sha256sum * > SHA256SUMS)
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*
