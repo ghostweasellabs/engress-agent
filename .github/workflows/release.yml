@@ -35,7 +35,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
-          client-id: Iv23liJ0cYa8efo330No
+          app-id: Iv23liJ0cYa8efo330No
           private-key: ${{ secrets.ENGRESS_CI_APP_PRIVATE_KEY }}
           owner: ghostweasellabs
           permission-contents: read
@@ -103,7 +103,7 @@ jobs:
       - uses: actions/create-github-app-token@v3
         id: app-token
         with:
-          client-id: ${{ vars.ENGRESS_CI_APP_CLIENT_ID }}
+          app-id: ${{ vars.ENGRESS_CI_APP_CLIENT_ID }}
           private-key: ${{ secrets.ENGRESS_CI_APP_PRIVATE_KEY }}
           owner: ghostweasellabs
           repositories: engress-sdk
