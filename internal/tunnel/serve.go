@@ -161,9 +161,9 @@ func handleStream(ctx context.Context, stream net.Conn, localAddrs map[string]st
 		}
 		switch proto {
 		case "tcp":
-			proxyStreamTCP(ctx, stream, localAddr)
+			proxyStreamTCP(ctx, br, stream, localAddr)
 		case "udp":
-			proxyStreamUDP(ctx, stream, localAddr)
+			proxyStreamUDP(ctx, br, stream, localAddr)
 		}
 		return
 	}

@@ -2,10 +2,11 @@ package tunnel
 
 import (
 	"context"
+	"io"
 	"net"
 )
 
-func proxyStreamUDP(ctx context.Context, stream net.Conn, localAddr string) {
+func proxyStreamUDP(ctx context.Context, r io.Reader, w io.Writer, localAddr string) {
 	host, port, err := net.SplitHostPort(localAddr)
 	if err != nil {
 		host = "127.0.0.1"
@@ -31,7 +32,7 @@ func proxyStreamUDP(ctx context.Context, stream net.Conn, localAddr string) {
 				return
 			default:
 			}
-			payload, err := ReadFrame(stream)
+			payload, err := ReadFrame(r)
 			if err != nil {
 				errCh <- err
 				return
@@ -57,7 +58,7 @@ func proxyStreamUDP(ctx context.Context, stream net.Conn, localAddr string) {
 				errCh <- err
 				return
 			}
-			if err := WriteFrame(stream, buf[:n]); err != nil {
+			if err := WriteFrame(w, buf[:n]); err != nil {
 				errCh <- err
 				return
 			}

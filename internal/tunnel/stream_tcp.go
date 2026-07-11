@@ -6,7 +6,7 @@ import (
 	"net"
 )
 
-func proxyStreamTCP(ctx context.Context, stream net.Conn, localAddr string) {
+func proxyStreamTCP(ctx context.Context, r io.Reader, w io.Writer, localAddr string) {
 	d := net.Dialer{}
 	backend, err := d.DialContext(ctx, "tcp", localAddr)
 	if err != nil {
@@ -16,9 +16,9 @@ func proxyStreamTCP(ctx context.Context, stream net.Conn, localAddr string) {
 
 	done := make(chan struct{})
 	go func() {
-		_, _ = io.Copy(backend, stream)
+		_, _ = io.Copy(backend, r)
 		close(done)
 	}()
-	_, _ = io.Copy(stream, backend)
+	_, _ = io.Copy(w, backend)
 	<-done
 }
