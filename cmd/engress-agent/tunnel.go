@@ -34,6 +34,7 @@ func newTunnelServeCmd() *cobra.Command {
 	var token string
 	var endpointIDs []string
 	var localAddr string
+	var endpointMaps []string
 	var tlsCA string
 	var tlsServerName string
 	var apiBase string
@@ -54,16 +55,23 @@ func newTunnelServeCmd() *cobra.Command {
 				_, _ = fmt.Fprintln(os.Stderr, "warning: --insecure-skip-verify disables TLS certificate verification")
 			}
 
-			localAddrs := map[string]string{}
+			localAddrs, err := tunnel.EndpointLocalsFromFlags(endpointMaps)
+			if err != nil {
+				return err
+			}
+			if localAddrs == nil {
+				localAddrs = map[string]string{}
+			}
 			if localAddr != "" {
 				for _, id := range endpointIDs {
-					localAddrs[id] = localAddr
+					if _, exists := localAddrs[id]; !exists {
+						localAddrs[id] = localAddr
+					}
 				}
 			}
 
 			var caPEM []byte
 			if !insecureSkip {
-				var err error
 				caPEM, err = tunnel.ResolveTunnelCA(tlsCA, apiBase)
 				if err != nil {
 					return err
@@ -89,6 +97,7 @@ func newTunnelServeCmd() *cobra.Command {
 	c.Flags().StringVar(&token, "token", "", "Tunnel auth token")
 	c.Flags().StringSliceVar(&endpointIDs, "endpoint-id", nil, "Endpoint ID to register (repeatable)")
 	c.Flags().StringVar(&localAddr, "local", "", "Local TCP backend (e.g. 127.0.0.1:18080); empty uses built-in smoke handler")
+	c.Flags().StringArrayVar(&endpointMaps, "endpoint", nil, "STREAM endpoint mapping id:port or id:host:port (repeatable)")
 	c.Flags().StringVar(&tlsCA, "tls-ca", "", "Path to tunnel CA PEM (default: fetch from API)")
 	c.Flags().StringVar(&tlsServerName, "tls-server-name", "", "TLS SNI server name (default: edge-host)")
 	c.Flags().StringVar(&apiBase, "api-base", "https://engress.io", "API base URL for tunnel CA fetch")

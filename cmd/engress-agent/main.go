@@ -9,6 +9,7 @@ import (
 func main() {
 	root := cli.NewRootCommand()
 	root.AddCommand(newTunnelCmd())
+	root.AddCommand(newLoginCmd())
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}

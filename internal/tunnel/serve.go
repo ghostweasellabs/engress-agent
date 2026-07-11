@@ -147,6 +147,24 @@ func handleStream(ctx context.Context, stream net.Conn, localAddrs map[string]st
 	br := bufio.NewReader(stream)
 	head, err := br.Peek(7)
 	if err == nil && string(head) == "STREAM " {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			return
+		}
+		proto, endpointID, err := parseStreamLine(line)
+		if err != nil {
+			return
+		}
+		localAddr, ok := lookupStreamLocalAddr(endpointID, localAddrs)
+		if !ok {
+			return
+		}
+		switch proto {
+		case "tcp":
+			proxyStreamTCP(ctx, stream, localAddr)
+		case "udp":
+			proxyStreamUDP(ctx, stream, localAddr)
+		}
 		return
 	}
 
@@ -179,6 +197,27 @@ func handleStream(ctx context.Context, stream net.Conn, localAddrs map[string]st
 	}
 	defer resp.Body.Close()
 	_ = resp.Write(stream)
+}
+
+func parseStreamLine(line string) (proto, endpointID string, err error) {
+	line = strings.TrimSpace(line)
+	rest, ok := strings.CutPrefix(line, "STREAM ")
+	if !ok {
+		return "", "", fmt.Errorf("not a stream line")
+	}
+	parts := strings.Fields(rest)
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("invalid STREAM line")
+	}
+	return parts[0], parts[1], nil
+}
+
+func lookupStreamLocalAddr(endpointID string, localAddrs map[string]string) (string, bool) {
+	if localAddrs == nil {
+		return "", false
+	}
+	addr, ok := localAddrs[endpointID]
+	return addr, ok && addr != ""
 }
 
 func resolveLocalAddr(host string, localAddrs map[string]string) string {
